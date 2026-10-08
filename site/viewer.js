@@ -16,6 +16,9 @@
   let playing = false;
   let rafId = null, lastTick = 0;
   let gridSize = { rows: 0, cols: 0 };
+  let mode = 'dom';        // 'dom' replays recorded markup; 'stars' draws its own board
+  let sem = null;          // semantic recording (stars mode)
+  let board = null;        // StarsCodec.render controller (stars mode)
 
   // ---------- loading ----------
   async function gunzipBase64(b64) {
@@ -28,6 +31,7 @@
   }
 
   async function loadFromQuery() {
+    if (/^#[sz]=/.test(location.hash)) return { __sem: await StarsCodec.decodeFragment(location.hash) };
     const frag = location.hash.match(/^#r=(.+)$/);
     if (frag) return InkwellShare.decode(frag[1]);
     const qs = new URLSearchParams(location.search);
@@ -40,11 +44,13 @@
   }
 
   async function open(recording) {
+    if (recording && recording.__sem) return openSemantic(recording.__sem);
     if (!recording || !recording.base || !recording.events) {
       alert('That file is not an Inkwell Replay recording.');
       return;
     }
     rec = recording;
+    mode = 'dom'; sem = null; board = null;
     const html = rec.base.html || (await gunzipBase64(rec.base.htmlGz));
     baseHtml = html;
     const tpl = document.createElement('template');
@@ -57,11 +63,11 @@
       return { rows: Math.max(acc.rows, +r + 1 || 0), cols: Math.max(acc.cols, +k + 1 || 0) };
     }, { rows: 0, cols: 0 });
 
-    const board = $('board');
-    for (const [k, v] of Object.entries(rec.palette || {})) board.style.setProperty('--' + k, v);
-    board.style.width = rec.base.width + 'px';
-    board.style.maxWidth = '100%';
-    board.hidden = false;
+    const stage = $('board');
+    for (const [k, v] of Object.entries(rec.palette || {})) stage.style.setProperty('--' + k, v);
+    stage.style.width = rec.base.width + 'px';
+    stage.style.maxWidth = '100%';
+    stage.hidden = false;
     $('drop').hidden = true;
     $('controls').hidden = false;
 
@@ -73,15 +79,36 @@
       })
       .sort((a, b) => a.t - b.t);
     for (const ev of events) ev.label = describe(ev);
+    finishOpen();
+  }
 
+  // A compact (semantic) Stars recording: we draw the board ourselves.
+  function openSemantic(s) {
+    sem = s; mode = 'stars';
+    rec = { game: 'stars', date: s.date, startedAt: s.startedAt, duration: s.duration };
+    const stage = $('board');
+    stage.innerHTML = '';
+    stage.style.width = '588px';
+    stage.style.maxWidth = '100%';
+    stage.hidden = false;
+    $('drop').hidden = true;
+    $('controls').hidden = false;
+    board = StarsCodec.render(stage, s);
+    events = s.events.map((op, i) => {
+      const label = StarsCodec.describe(op, s.n);
+      return { i, t: op.t, op, ui: StarsCodec.isMove(op) ? null : label, label };
+    });
+    finishOpen();
+  }
+
+  function finishOpen() {
     const moves = events.filter((e) => !e.ui).length;
     $('title').textContent = `${cap(rec.game)} · ${rec.date || 'undated'}`;
-    $('meta').textContent = `${moves} moves in ${fmt(rec.duration)} · recorded ${new Date(rec.startedAt).toLocaleString()}`;
+    $('meta').textContent = `${moves} moves in ${fmt(rec.duration)}` + (rec.startedAt ? ` · recorded ${new Date(rec.startedAt).toLocaleString()}` : '');
     $('count').textContent = `(${moves})`;
     $('total').textContent = fmt(rec.duration);
     $('scrub').max = String(rec.duration || 1);
     document.title = `${cap(rec.game)} ${rec.date || ''} – Inkwell Replay`;
-
     renderList();
     reset();
     seekTo(0);
@@ -94,27 +121,39 @@
   }
 
   function reset() {
-    const board = $('board');
-    board.innerHTML = '';
+    cursor = 0;
+    if (mode === 'stars') { board.reset(); return; }
+    const stage = $('board');
+    stage.innerHTML = '';
     root = baseRoot.cloneNode(true);
     root.style.width = '100%';
     root.style.margin = '0';
-    board.appendChild(root);
-    cursor = 0;
+    stage.appendChild(root);
   }
 
   function applyEvent(ev, flash) {
+    if (mode === 'stars') {
+      const cell = board.apply(ev.op);
+      if (flash && cell !== null && cell !== undefined) flashRect(board.cellRect(cell));
+      return;
+    }
     if (ev.ui) return;
     const el = elAt(root, ev.path);
     if (!el || !(ev.id in rec.dict)) return;
     el.outerHTML = InkwellShare.sanitizeHtml(rec.dict[ev.id]);
-    if (flash) flashAt(elAt(root, ev.path));
+    if (flash) flashEvent(ev);
   }
 
-  function flashAt(el) {
+  function flashEvent(ev) {
+    if (!ev || ev.ui) return;
+    if (mode === 'stars') { const c = ev.op.cell; if (c !== undefined) flashRect(board.cellRect(c)); return; }
+    const el = elAt(root, ev.path || []);
+    if (el) flashRect(el.getBoundingClientRect());
+  }
+
+  function flashRect(r) {
     const f = $('flash');
-    if (!el) return;
-    const r = el.getBoundingClientRect(), s = $('board').parentElement.getBoundingClientRect();
+    const s = $('board').parentElement.getBoundingClientRect();
     Object.assign(f.style, { left: r.left - s.left - 3 + 'px', top: r.top - s.top - 3 + 'px', width: r.width + 'px', height: r.height + 'px' });
     f.hidden = false;
     f.classList.add('on');
@@ -166,7 +205,7 @@
     }
     const before = cursor;
     seekTo(next);
-    if (cursor > before) flashAt(elAt(root, events[cursor - 1].path || []));
+    if (cursor > before) flashEvent(events[cursor - 1]);
     if (playhead >= (rec.duration || 0)) return pause();
     rafId = requestAnimationFrame(tick);
   }
@@ -259,10 +298,20 @@
     else if (e.key === 'End') { e.preventDefault(); stepToEvent(events.length - 1); }
   });
 
+  // Prefer the compact Stars fragment; fall back to the generic DOM payload.
+  async function shareFragment() {
+    if (mode === 'stars') return StarsCodec.encodeFragment(sem);
+    try {
+      const s = StarsCodec.fromGeneric(rec, baseHtml);
+      if (s && s.skipped === 0) return StarsCodec.encodeFragment(s);
+    } catch (err) { console.warn('compact encoding failed', err); }
+    return 'r=' + await InkwellShare.encode(rec, baseHtml);
+  }
+
   $('share').addEventListener('click', async () => {
     if (!rec) return;
     const base = (typeof INKWELL_REPLAY_CONFIG !== 'undefined' && INKWELL_REPLAY_CONFIG.PUBLIC_VIEWER_URL) || location.origin + location.pathname;
-    const url = InkwellShare.link(base, await InkwellShare.encode(rec, baseHtml));
+    const url = base + '#' + await shareFragment();
     try {
       await navigator.clipboard.writeText(url);
       toast(`Link copied · ${(url.length / 1000).toFixed(1)}k characters`);
@@ -296,4 +345,5 @@
   });
 
   loadFromQuery().then((r) => r && open(r)).catch((err) => { console.error(err); });
+  window.__viewer = { shareFragment, get mode() { return mode; }, get sem() { return sem; }, get rec() { return rec; } };
 })();
