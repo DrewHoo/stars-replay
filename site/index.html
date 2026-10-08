@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stars Replay</title>
+  <meta name="description" content="Watch a Stars or Mosaic puzzle solve move by move. Replays are recorded with the Inkwell Replay browser extension and shared as a single link.">
+  <link rel="canonical" href="https://drewhoover.com/stars-replay/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Stars Replay">
+  <meta property="og:description" content="Watch a Stars or Mosaic puzzle solve move by move, with every X, star and highlight on its original timeline.">
+  <meta property="og:url" content="https://drewhoover.com/stars-replay/">
+  <meta name="twitter:card" content="summary">
+  <!-- drewhoover.com cross-site chrome -->
+  <script src="https://drewhoover.com/embed/back-bar.js" async></script>
+  <script src="https://drewhoover.com/embed/analytics.js" async></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1 id="title">Stars Replay</h1>
+      <div class="meta" id="meta"></div>
+    </div>
+    <div class="right">
+      <button id="share">Copy share link</button>
+      <button id="load" class="quiet">Load JSON…</button>
+      <input type="file" id="file" accept="application/json,.json" hidden>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div id="drop" class="drop">
+        <p>No recording loaded.</p>
+        <p>Open a share link from a recording, drop a recording <code>.json</code> here, or use <b>Load JSON…</b>.<br>Recordings are made with the Inkwell Replay browser extension while you solve on inkwellgames.com.</p>
+      </div>
+      <div id="board" class="board" hidden></div>
+      <div id="flash" class="flash" hidden></div>
+    </section>
+
+    <aside class="moves">
+      <h2>Moves <span id="count"></span></h2>
+      <ol id="list"></ol>
+    </aside>
+  </main>
+
+  <footer class="controls" id="controls" hidden>
+    <button id="first" title="Start">⏮</button>
+    <button id="back" title="Previous move (←)">◀</button>
+    <button id="play" title="Play / pause (space)">▶</button>
+    <button id="fwd" title="Next move (→)">▶|</button>
+    <button id="last" title="End">⏭</button>
+    <input type="range" id="scrub" min="0" max="1000" value="0">
+    <span class="time"><span id="now">0:00</span> / <span id="total">0:00</span></span>
+    <label>Speed
+      <select id="speed">
+        <option value="1">1×</option>
+        <option value="2" selected>2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="skip" checked> Skip pauses longer than 2s</label>
+    <span class="hint">← → step · space play · Home/End</span>
+  </footer>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="share.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
