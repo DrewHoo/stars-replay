@@ -30,10 +30,18 @@
     return new Response(ds.readable).text();
   }
 
+  // Replay data rides in the query string (so link previews can read it) or,
+  // for older links, in the fragment.
+  function linkData() {
+    const qs = new URLSearchParams(location.search);
+    for (const k of ['z', 's', 'r', 'u']) if (qs.get(k)) return k + '=' + qs.get(k);
+    const m = location.hash.match(/^#([zsru])=([A-Za-z0-9_-]+)$/);
+    return m ? m[1] + '=' + m[2] : null;
+  }
   async function loadFromQuery() {
-    if (/^#[sz]=/.test(location.hash)) return { __sem: await StarsCodec.decodeFragment(location.hash) };
-    const frag = location.hash.match(/^#([ru])=(.+)$/);
-    if (frag) return frag[1] === 'r' ? InkwellShare.decode(frag[2]) : InkwellShare.decodePlain(frag[2]);
+    const data = linkData();
+    if (data && /^[sz]=/.test(data)) return { __sem: await StarsCodec.decodeFragment('#' + data) };
+    if (data) return data.startsWith('r=') ? InkwellShare.decode(data.slice(2)) : InkwellShare.decodePlain(data.slice(2));
     const qs = new URLSearchParams(location.search);
     if (qs.get('id') && hasChrome) {
       const key = 'rec:' + qs.get('id');
@@ -311,7 +319,7 @@
   $('share').addEventListener('click', async () => {
     if (!rec) return;
     const base = (typeof INKWELL_REPLAY_CONFIG !== 'undefined' && INKWELL_REPLAY_CONFIG.PUBLIC_VIEWER_URL) || location.origin + location.pathname;
-    const url = base + '#' + await shareFragment();
+    const url = base + '?' + await shareFragment();
     try {
       await navigator.clipboard.writeText(url);
       toast(`Link copied · ${(url.length / 1000).toFixed(1)}k characters`);

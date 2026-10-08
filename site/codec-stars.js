@@ -352,5 +352,5 @@ const StarsCodec = (() => {
   function fmt(ms) { const s = Math.floor((ms || 0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
   const isMove = (op) => op.kind === KIND.MARK || op.kind === KIND.BG || op.kind === KIND.HILITE;
 
-  return { KIND, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells };
+  return { KIND, GLYPHS, DEFAULT_COLORS, HILITE_FILL, UI_LABELS, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells, fmt };
 })();
