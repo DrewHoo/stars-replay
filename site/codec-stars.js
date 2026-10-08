@@ -251,8 +251,11 @@ const StarsCodec = (() => {
   // Share-link fragment: "s=" raw bytes or "z=" deflated, whichever is shorter.
   async function encodeFragment(sem) {
     const raw = toBytes(sem);
-    const packed = await deflate(raw);
-    return packed.length + 2 < raw.length ? 'z=' + toB64(packed) : 's=' + toB64(raw);
+    if (typeof CompressionStream !== 'function') return 's=' + toB64(raw);
+    try {
+      const packed = await deflate(raw);
+      return packed.length + 2 < raw.length ? 'z=' + toB64(packed) : 's=' + toB64(raw);
+    } catch (err) { return 's=' + toB64(raw); }
   }
   async function decodeFragment(fragment) {
     const m = /^#?([sz])=(.+)$/.exec(fragment);

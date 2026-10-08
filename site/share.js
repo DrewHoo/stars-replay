@@ -2,7 +2,9 @@
 // A share link carries the whole recording in the URL fragment, gzipped and
 // base64url-encoded, so a static page can replay it with no backend.
 const InkwellShare = (() => {
+  const canCompress = typeof CompressionStream === 'function' && typeof DecompressionStream === 'function';
   async function gzip(str) {
+    if (!canCompress) throw new Error('CompressionStream unavailable');
     const cs = new CompressionStream('gzip');
     const w = cs.writable.getWriter();
     w.write(new TextEncoder().encode(str));
@@ -36,6 +38,18 @@ const InkwellShare = (() => {
   async function decode(fragment) {
     return JSON.parse(await gunzip(fromB64(fragment)));
   }
+  // Fragment for a share link: "r=" gzipped, or "u=" plain when the browser
+  // cannot compress (some content-script sandboxes lack CompressionStream).
+  async function fragment(rec, baseHtml) {
+    const payload = { ...rec, base: { ...rec.base, html: baseHtml } };
+    delete payload.base.htmlGz;
+    const json = JSON.stringify(payload);
+    if (canCompress) { try { return 'r=' + toB64(await gzip(json), true); } catch (err) { /* fall through */ } }
+    return 'u=' + toB64(new TextEncoder().encode(json), true);
+  }
+  function decodePlain(frag) {
+    return JSON.parse(new TextDecoder().decode(fromB64(frag)));
+  }
   // Recordings can arrive from anyone's share link, so everything we re-render
   // is filtered through a strict allowlist: the handful of tags and attributes
   // the inkwellgames.com board actually uses. Scripts, event handlers and
@@ -63,5 +77,5 @@ const InkwellShare = (() => {
   function link(viewerUrl, encoded) {
     return viewerUrl + '#r=' + encoded;
   }
-  return { gzip, gunzip, toB64, fromB64, encode, decode, link, sanitizeHtml };
+  return { gzip, gunzip, toB64, fromB64, encode, decode, fragment, decodePlain, link, sanitizeHtml, canCompress };
 })();
