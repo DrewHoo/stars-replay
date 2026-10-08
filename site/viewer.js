@@ -116,7 +116,7 @@
     $('count').textContent = `(${moves})`;
     $('total').textContent = fmt(rec.duration);
     $('scrub').max = String(rec.duration || 1);
-    document.title = `${cap(rec.game)} ${rec.date || ''} – Inkwell Replay`;
+    document.title = `${cap(rec.game)} ${rec.date || ''} – Stars Replay`;
     renderList();
     reset();
     seekTo(0);
