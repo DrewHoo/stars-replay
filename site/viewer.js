@@ -2,8 +2,9 @@
 // re-applies each recorded slot diff in time order.
 (() => {
   const $ = (id) => document.getElementById(id);
-  const hasChrome = typeof chrome !== 'undefined' && !!(chrome.storage && chrome.storage.local);
-  const MAX_GAP_MS = 2000;
+  const ext = globalThis.browser || globalThis.chrome;
+  const hasChrome = !!(ext && ext.storage && ext.storage.local);
+  const MAX_GAP_MS = 3000; // idle stretches longer than this are skipped during playback
 
   let rec = null;          // the loaded recording
   let baseHtml = '';       // decompressed board root HTML
@@ -32,7 +33,7 @@
     const qs = new URLSearchParams(location.search);
     if (qs.get('id') && hasChrome) {
       const key = 'rec:' + qs.get('id');
-      return (await chrome.storage.local.get(key))[key] || null;
+      return (await ext.storage.local.get(key))[key] || null;
     }
     if (qs.get('src')) return (await fetch(qs.get('src'))).json();
     return null;
@@ -47,7 +48,7 @@
     const html = rec.base.html || (await gunzipBase64(rec.base.htmlGz));
     baseHtml = html;
     const tpl = document.createElement('template');
-    tpl.innerHTML = html.trim();
+    tpl.innerHTML = InkwellShare.sanitizeHtml(html);
     baseRoot = tpl.content.firstElementChild;
 
     const cells = [...baseRoot.querySelectorAll('[data-testid^="puzzle-cell-"]')];
@@ -65,7 +66,11 @@
     $('controls').hidden = false;
 
     events = rec.events
-      .map((e, i) => ({ i, t: e[0], path: e[1] === 'ui' ? null : e[1], id: e[2], ui: e[1] === 'ui' ? e[2] : null }))
+      .map((e, i) => {
+        const move = Array.isArray(e[1]);
+        return { i, t: e[0], path: move ? e[1] : null, id: move ? e[2] : null,
+                 ui: e[1] === 'ui' ? e[2] : e[1] === 'pause' ? 'paused for ' + fmt(e[2]) : null };
+      })
       .sort((a, b) => a.t - b.t);
     for (const ev of events) ev.label = describe(ev);
 
@@ -102,7 +107,7 @@
     if (ev.ui) return;
     const el = elAt(root, ev.path);
     if (!el || !(ev.id in rec.dict)) return;
-    el.outerHTML = rec.dict[ev.id];
+    el.outerHTML = InkwellShare.sanitizeHtml(rec.dict[ev.id]);
     if (flash) flashAt(elAt(root, ev.path));
   }
 
@@ -154,7 +159,7 @@
     const speed = +$('speed').value;
     let next = playhead + (nowMs - lastTick) * speed;
     lastTick = nowMs;
-    if ($('skip').checked && cursor < events.length) {
+    if (cursor < events.length) {
       const gapStart = cursor ? events[cursor - 1].t : 0;
       const nextT = events[cursor].t;
       if (nextT - gapStart > MAX_GAP_MS && next < nextT - MAX_GAP_MS / 2) next = Math.max(next, nextT - MAX_GAP_MS / 2);
@@ -245,7 +250,7 @@
   document.addEventListener('keydown', (e) => {
     if (!rec) return;
     const t = e.target;
-    const typing = t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox');
+    const typing = t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.type !== 'range');
     if (typing) return;
     if (e.key === ' ') { e.preventDefault(); playing ? pause() : play(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); stepToEvent(cursor); }

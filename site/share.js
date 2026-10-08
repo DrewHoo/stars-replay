@@ -36,8 +36,32 @@ const InkwellShare = (() => {
   async function decode(fragment) {
     return JSON.parse(await gunzip(fromB64(fragment)));
   }
+  // Recordings can arrive from anyone's share link, so everything we re-render
+  // is filtered through a strict allowlist: the handful of tags and attributes
+  // the inkwellgames.com board actually uses. Scripts, event handlers and
+  // url() references never make it to the page.
+  const SAFE_TAGS = new Set(['div', 'span', 'button', 'svg', 'g', 'path', 'line', 'rect', 'circle', 'polyline', 'polygon', 'text', 'defs', 'clippath', 'use']);
+  const SAFE_ATTRS = new Set(['style', 'class', 'id', 'type', 'viewbox', 'preserveaspectratio', 'xmlns', 'd', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'width', 'height', 'points', 'fill', 'fill-opacity', 'fill-rule', 'clip-rule', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'opacity', 'transform', 'clip-path']);
+  function sanitizeHtml(html) {
+    const doc = new DOMParser().parseFromString('<body>' + html, 'text/html');
+    const walk = (node) => {
+      for (const child of [...node.children]) {
+        const tag = child.tagName.toLowerCase();
+        if (!SAFE_TAGS.has(tag)) { child.remove(); continue; }
+        for (const attr of [...child.attributes]) {
+          const name = attr.name.toLowerCase();
+          const ok = SAFE_ATTRS.has(name) || name.startsWith('data-') || name.startsWith('aria-');
+          const bad = /url\s*\(|javascript:|expression\s*\(/i.test(attr.value) || name.startsWith('on');
+          if (!ok || bad) child.removeAttribute(attr.name);
+        }
+        walk(child);
+      }
+    };
+    walk(doc.body);
+    return doc.body.innerHTML;
+  }
   function link(viewerUrl, encoded) {
     return viewerUrl + '#r=' + encoded;
   }
-  return { gzip, gunzip, toB64, fromB64, encode, decode, link };
+  return { gzip, gunzip, toB64, fromB64, encode, decode, link, sanitizeHtml };
 })();
