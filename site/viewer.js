@@ -32,8 +32,8 @@
 
   async function loadFromQuery() {
     if (/^#[sz]=/.test(location.hash)) return { __sem: await StarsCodec.decodeFragment(location.hash) };
-    const frag = location.hash.match(/^#r=(.+)$/);
-    if (frag) return InkwellShare.decode(frag[1]);
+    const frag = location.hash.match(/^#([ru])=(.+)$/);
+    if (frag) return frag[1] === 'r' ? InkwellShare.decode(frag[2]) : InkwellShare.decodePlain(frag[2]);
     const qs = new URLSearchParams(location.search);
     if (qs.get('id') && hasChrome) {
       const key = 'rec:' + qs.get('id');
@@ -305,7 +305,7 @@
       const s = StarsCodec.fromGeneric(rec, baseHtml);
       if (s && s.skipped === 0) return StarsCodec.encodeFragment(s);
     } catch (err) { console.warn('compact encoding failed', err); }
-    return 'r=' + await InkwellShare.encode(rec, baseHtml);
+    return InkwellShare.fragment(rec, baseHtml);
   }
 
   $('share').addEventListener('click', async () => {
