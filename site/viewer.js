@@ -141,8 +141,9 @@
 
   function applyEvent(ev, flash) {
     if (mode === 'stars') {
-      const cell = board.apply(ev.op);
-      if (flash && cell !== null && cell !== undefined) flashRect(board.cellRect(cell));
+      const hit = board.apply(ev.op);
+      if (flash && typeof hit === 'number') flashRect(board.cellRect(hit));
+      else if (flash && Array.isArray(hit) && hit.length) flashRect(board.groupRect(hit));
       return;
     }
     if (ev.ui) return;
@@ -154,7 +155,12 @@
 
   function flashEvent(ev) {
     if (!ev || ev.ui) return;
-    if (mode === 'stars') { const c = ev.op.cell; if (c !== undefined) flashRect(board.cellRect(c)); return; }
+    if (mode === 'stars') {
+      const op = ev.op;
+      if (op.cell !== undefined) flashRect(board.cellRect(op.cell));
+      else if (op.cells && op.cells.length) flashRect(board.groupRect(op.cells));
+      return;
+    }
     const el = elAt(root, ev.path || []);
     if (el) flashRect(el.getBoundingClientRect());
   }

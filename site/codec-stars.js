@@ -5,9 +5,10 @@
 // viewer does not need the site's markup at all.
 const StarsCodec = (() => {
   const MAGIC = 0x53; // 'S'
-  const VERSION = 1;
+  const VERSION = 2; // v2: highlight groups (v1 wrote one bitmap)
   const EPOCH_DAY = Date.UTC(2025, 0, 1) / 86400000;
-  const KIND = { MARK: 0, BG: 1, HILITE: 2, UI: 3, PAUSE: 4 };
+  const KIND = { MARK: 0, BG: 1, HILITE: 2, UI: 3, PAUSE: 4, HILITE_ADD: 5, HILITE_DEL: 6, HILITE_UPD: 7 };
+  const HILITE_INSET = 0.15, HILITE_RADIUS = 0.2; // the site's path geometry
   const UI_LABELS = ['Undo', 'Hint', 'Check', 'Toggle highlighter', 'Reset Puzzle', 'Resume'];
   const DEFAULT_COLORS = { 'coral-300': '#ff7868', 'yellow-default': '#fed23f', 'orange-300': '#ff9c4b', 'white': '#fafafa', 'black': '#2f2525', 'gray-300': '#bdbdbd', 'gray-400': '#8b8b8b' };
   const HILITE_FILL = '#8575FC';
@@ -64,13 +65,12 @@ const StarsCodec = (() => {
     return 0;
   }
 
-  // Which cells does a set of highlighter paths cover? Decided geometrically
-  // with isPointInFill on a scratch SVG, so the path shape never matters.
-  function hiliteCells(layerHtml, n) {
-    const cells = new Array(n * n).fill(false);
+  // The site draws one <path> per highlight group. Map each path to its cells
+  // geometrically with isPointInFill on a scratch SVG, keeping path order.
+  function hiliteGroups(layerHtml, n) {
     const el = parseHtml(layerHtml);
     const paths = el ? [...el.querySelectorAll('path')] : [];
-    if (!paths.length) return cells;
+    if (!paths.length) return [];
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${n} ${n}`);
@@ -78,13 +78,101 @@ const StarsCodec = (() => {
     svg.style.cssText = 'position:absolute;left:-9999px;top:-9999px';
     const live = paths.map((p) => { const q = document.createElementNS(NS, 'path'); q.setAttribute('d', p.getAttribute('d') || ''); svg.appendChild(q); return q; });
     document.body.appendChild(svg);
+    const groups = live.map(() => []);
     try {
       for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
         const pt = new DOMPoint(c + 0.5, r + 0.5);
-        if (live.some((q) => q.isPointInFill(pt))) cells[r * n + c] = true;
+        const i = live.findIndex((q) => q.isPointInFill(pt));
+        if (i >= 0) groups[i].push(r * n + c);
       }
     } finally { svg.remove(); }
+    return groups.filter((g) => g.length);
+  }
+  function hiliteCells(layerHtml, n) {
+    const cells = new Array(n * n).fill(false);
+    for (const g of hiliteGroups(layerHtml, n)) for (const i of g) cells[i] = true;
     return cells;
+  }
+
+  // Compare two group lists (site path order) and describe the change as the
+  // smallest op: one group added, one removed, one changed, else the full set.
+  const groupKey = (g) => g.join(',');
+  function diffGroups(oldG, newG) {
+    const same = (a, b) => a.length === b.length && a.every((g, i) => groupKey(g) === groupKey(b[i]));
+    if (same(oldG, newG)) return null;
+    if (newG.length === oldG.length + 1) {
+      for (let i = 0; i < newG.length; i++) if (same(newG.slice(0, i).concat(newG.slice(i + 1)), oldG)) return { kind: KIND.HILITE_ADD, index: i, cells: newG[i] };
+    }
+    if (newG.length === oldG.length - 1) {
+      for (let i = 0; i < oldG.length; i++) if (same(oldG.slice(0, i).concat(oldG.slice(i + 1)), newG)) return { kind: KIND.HILITE_DEL, index: i };
+    }
+    if (newG.length === oldG.length) {
+      const changed = newG.map((g, i) => (groupKey(g) !== groupKey(oldG[i]) ? i : -1)).filter((i) => i >= 0);
+      if (changed.length === 1) return { kind: KIND.HILITE_UPD, index: changed[0], cells: newG[changed[0]] };
+    }
+    return { kind: KIND.HILITE, groups: newG };
+  }
+  // Apply a highlight op to a group list (shared by decoder, renderer, stats).
+  function applyGroupOp(groups, op) {
+    if (op.kind === KIND.HILITE) return op.groups.map((g) => g.slice());
+    const out = groups.map((g) => g.slice());
+    if (op.kind === KIND.HILITE_ADD) out.splice(Math.min(op.index, out.length), 0, op.cells.slice());
+    else if (op.kind === KIND.HILITE_DEL) out.splice(op.index, 1);
+    else if (op.kind === KIND.HILITE_UPD) out[op.index] = op.cells.slice();
+    return out;
+  }
+
+  // The outline the site draws for a group: boundary of the cell union, inset
+  // on every outer edge, corners rounded. Returns an SVG path "d" in grid units.
+  function groupOutline(cells, n, inset = HILITE_INSET, r = HILITE_RADIUS) {
+    const set = new Set(cells);
+    const has = (rr, cc) => rr >= 0 && cc >= 0 && rr < n && cc < n && set.has(rr * n + cc);
+    const edges = new Map(); // "x,y" -> [x2, y2], clockwise around the shape (y down)
+    for (const i of cells) {
+      const rr = Math.floor(i / n), cc = i % n;
+      if (!has(rr - 1, cc)) edges.set(`${cc},${rr}`, [cc + 1, rr]);
+      if (!has(rr, cc + 1)) edges.set(`${cc + 1},${rr}`, [cc + 1, rr + 1]);
+      if (!has(rr + 1, cc)) edges.set(`${cc + 1},${rr + 1}`, [cc, rr + 1]);
+      if (!has(rr, cc - 1)) edges.set(`${cc},${rr + 1}`, [cc, rr]);
+    }
+    const used = new Set();
+    const fmtN = (v) => String(Math.round(v * 1000) / 1000);
+    let d = '';
+    for (const startKey of edges.keys()) {
+      if (used.has(startKey)) continue;
+      const loop = [];
+      let key = startKey;
+      while (edges.has(key) && !used.has(key)) {
+        used.add(key);
+        loop.push(key.split(',').map(Number));
+        const next = edges.get(key);
+        key = `${next[0]},${next[1]}`;
+      }
+      // keep only corners
+      const L = loop.length;
+      const corners = loop.filter((q, i) => {
+        const pr = loop[(i - 1 + L) % L], nx = loop[(i + 1) % L];
+        return (q[0] - pr[0]) !== (nx[0] - q[0]) || (q[1] - pr[1]) !== (nx[1] - q[1]);
+      });
+      const C = corners.length;
+      if (C < 4) continue;
+      const seg = [];
+      for (let i = 0; i < C; i++) {
+        const q = corners[i], pr = corners[(i - 1 + C) % C], nx = corners[(i + 1) % C];
+        const dA = [Math.sign(q[0] - pr[0]), Math.sign(q[1] - pr[1])], dB = [Math.sign(nx[0] - q[0]), Math.sign(nx[1] - q[1])];
+        const nA = [-dA[1], dA[0]], nB = [-dB[1], dB[0]]; // right-hand normals = inward
+        const v = [q[0] + inset * (nA[0] + nB[0]), q[1] + inset * (nA[1] + nB[1])];
+        const sweep = dA[0] * dB[1] - dA[1] * dB[0] > 0 ? 1 : 0;
+        seg.push({ from: [v[0] - dA[0] * r, v[1] - dA[1] * r], to: [v[0] + dB[0] * r, v[1] + dB[1] * r], sweep });
+      }
+      d += `M ${fmtN(seg[0].from[0])} ${fmtN(seg[0].from[1])}`;
+      seg.forEach((sg, i) => {
+        if (i) d += ` L ${fmtN(sg.from[0])} ${fmtN(sg.from[1])}`;
+        d += ` A ${r} ${r} 0 0 ${sg.sweep} ${fmtN(sg.to[0])} ${fmtN(sg.to[1])}`;
+      });
+      d += ' Z';
+    }
+    return d;
   }
 
   function regionsFromWalls(grid, n) {
@@ -160,7 +248,8 @@ const StarsCodec = (() => {
       }
     }
     const layer = grid.querySelector('svg[preserveAspectRatio]');
-    if (layer && layer.querySelector('path')) initial.push({ kind: KIND.HILITE, cells: hiliteCells(layer.parentElement.outerHTML, n) });
+    let groups = layer && layer.querySelector('path') ? hiliteGroups(layer.parentElement.outerHTML, n) : [];
+    if (groups.length) initial.push({ kind: KIND.HILITE, groups });
 
     const events = [];
     let skipped = 0;
@@ -174,7 +263,12 @@ const StarsCodec = (() => {
       if (!info) { skipped++; continue; }
       if (info.type === 'mark') events.push({ t, kind: KIND.MARK, cell: info.cell, state: markState(html) });
       else if (info.type === 'bg') { const el = parseHtml(html); const name = el ? bgColorOf(el) : null; events.push({ t, kind: KIND.BG, cell: info.cell, color: name ? colorIdx(name) + 1 : 0 }); }
-      else if (info.type === 'hilite') events.push({ t, kind: KIND.HILITE, cells: hiliteCells(html, n) });
+      else if (info.type === 'hilite') {
+        const next = hiliteGroups(html, n);
+        const op = diffGroups(groups, next);
+        groups = next;
+        if (op) events.push({ t, ...op });
+      }
     }
     // BG color 0 means "clear"; shift initial ops to the same 1-based scheme.
     for (const op of initial) if (op.kind === KIND.BG) op.color += 1;
@@ -192,19 +286,35 @@ const StarsCodec = (() => {
   }
 
   // ---------- semantic <-> bytes ----------
+  function writeCells(w, cells) { w.varint(cells.length); for (const c of cells) w.varint(c); }
+  function readCells(r) { const k = r.varint(); const out = []; for (let i = 0; i < k; i++) out.push(r.varint()); return out; }
   function writeOp(w, op, n) {
     w.u8(op.kind);
     if (op.kind === KIND.MARK) { w.varint(op.cell); w.u8(op.state); }
     else if (op.kind === KIND.BG) { w.varint(op.cell); w.u8(op.color); }
-    else if (op.kind === KIND.HILITE) { const bytes = new Uint8Array(Math.ceil(n * n / 8)); op.cells.forEach((on, i) => { if (on) bytes[i >> 3] |= 1 << (i & 7); }); w.bytes(bytes); }
+    else if (op.kind === KIND.HILITE) { w.varint(op.groups.length); for (const g of op.groups) writeCells(w, g); }
+    else if (op.kind === KIND.HILITE_ADD) { w.varint(op.index); writeCells(w, op.cells); }
+    else if (op.kind === KIND.HILITE_DEL) w.varint(op.index);
+    else if (op.kind === KIND.HILITE_UPD) { w.varint(op.index); writeCells(w, op.cells); }
     else if (op.kind === KIND.UI) { const i = UI_LABELS.indexOf(op.label); if (i >= 0) w.u8(i); else { w.u8(255); w.str(op.label); } }
     else if (op.kind === KIND.PAUSE) w.varint(op.away);
   }
-  function readOp(r, n) {
+  function readOp(r, n, version) {
     const kind = r.u8();
     if (kind === KIND.MARK) return { kind, cell: r.varint(), state: r.u8() };
     if (kind === KIND.BG) return { kind, cell: r.varint(), color: r.u8() };
-    if (kind === KIND.HILITE) { const bytes = r.bytes(Math.ceil(n * n / 8)); const cells = []; for (let i = 0; i < n * n; i++) cells.push(!!(bytes[i >> 3] & (1 << (i & 7)))); return { kind, cells }; }
+    if (kind === KIND.HILITE) {
+      if (version === 1) { // one bitmap, read as a single anonymous group
+        const bytes = r.bytes(Math.ceil(n * n / 8)); const cells = [];
+        for (let i = 0; i < n * n; i++) if (bytes[i >> 3] & (1 << (i & 7))) cells.push(i);
+        return { kind, groups: cells.length ? [cells] : [] };
+      }
+      const k = r.varint(); const groups = []; for (let i = 0; i < k; i++) groups.push(readCells(r));
+      return { kind, groups };
+    }
+    if (kind === KIND.HILITE_ADD) return { kind, index: r.varint(), cells: readCells(r) };
+    if (kind === KIND.HILITE_DEL) return { kind, index: r.varint() };
+    if (kind === KIND.HILITE_UPD) return { kind, index: r.varint(), cells: readCells(r) };
     if (kind === KIND.UI) { const i = r.u8(); return { kind, label: i === 255 ? r.str() : UI_LABELS[i] || 'button' }; }
     if (kind === KIND.PAUSE) return { kind, away: r.varint() };
     throw new Error('bad op ' + kind);
@@ -229,7 +339,7 @@ const StarsCodec = (() => {
   function fromBytes(u8) {
     const r = new Reader(u8);
     if (r.u8() !== MAGIC) throw new Error('not a Stars replay');
-    const version = r.u8(); if (version !== VERSION) throw new Error('unsupported version ' + version);
+    const version = r.u8(); if (version < 1 || version > VERSION) throw new Error('unsupported version ' + version);
     const n = r.u8();
     const day = r.u16();
     const date = day ? new Date((day + EPOCH_DAY) * 86400000).toISOString().slice(0, 10) : null;
@@ -242,9 +352,9 @@ const StarsCodec = (() => {
     const nc = r.u8();
     for (let i = 0; i < nc; i++) { const name = r.str(); const hex = '#' + [r.u8(), r.u8(), r.u8()].map((x) => x.toString(16).padStart(2, '0')).join(''); colors.push({ name, hex }); }
     const initial = []; const ni = r.varint();
-    for (let i = 0; i < ni; i++) initial.push(readOp(r, n));
+    for (let i = 0; i < ni; i++) initial.push(readOp(r, n, version));
     const events = []; const ne = r.varint(); let t = 0;
-    for (let i = 0; i < ne; i++) { t += r.varint(); events.push({ t, ...readOp(r, n) }); }
+    for (let i = 0; i < ne; i++) { t += r.varint(); events.push({ t, ...readOp(r, n, version) }); }
     return { game: 'stars', n, regions, date, startedAt, duration, colors, initial, events, skipped: 0 };
   }
 
@@ -290,7 +400,7 @@ const StarsCodec = (() => {
     container.appendChild(svg);
 
     const marks = new Array(n * n).fill(0), bgs = new Array(n * n).fill(0);
-    let hil = new Array(n * n).fill(false);
+    let groups = [];
     const markEls = new Array(n * n).fill(null), bgEls = new Array(n * n).fill(null);
 
     function drawMark(cell, state) {
@@ -312,23 +422,22 @@ const StarsCodec = (() => {
     }
     function drawHilite() {
       hiLayer.innerHTML = '';
-      for (let i = 0; i < n * n; i++) if (hil[i]) {
-        const r = Math.floor(i / n), c = i % n;
-        const L = c > 0 && hil[i - 1], R = c < n - 1 && hil[i + 1], U = r > 0 && hil[i - n], D = r < n - 1 && hil[i + n];
-        // one rounded rect per cell, stretched toward highlighted neighbours so a stroke reads as one shape
-        const x0 = c + (L ? 0 : 0.1), x1 = c + 1 - (R ? 0 : 0.1), y0 = r + (U ? 0 : 0.1), y1 = r + 1 - (D ? 0 : 0.1);
-        mk('rect', { x: x0, y: y0, width: x1 - x0, height: y1 - y0, rx: 0.18, fill: HILITE_FILL, 'fill-opacity': 0.55 }, hiLayer);
-      }
+      for (const g of groups) mk('path', { d: groupOutline(g, n), fill: HILITE_FILL, 'fill-opacity': 0.55 }, hiLayer);
     }
     function apply(op) {
       if (op.kind === KIND.MARK) { marks[op.cell] = op.state; drawMark(op.cell, op.state); return op.cell; }
       if (op.kind === KIND.BG) { bgs[op.cell] = op.color; drawBg(op.cell, op.color); return op.cell; }
-      if (op.kind === KIND.HILITE) { hil = op.cells.slice(); drawHilite(); return null; }
+      if (op.kind === KIND.HILITE || op.kind === KIND.HILITE_ADD || op.kind === KIND.HILITE_DEL || op.kind === KIND.HILITE_UPD) {
+        const before = groups;
+        groups = applyGroupOp(groups, op);
+        drawHilite();
+        return op.cells || (op.kind === KIND.HILITE_DEL ? before[op.index] : null) || null; // cells to flash
+      }
       return null;
     }
     function reset() {
       for (let i = 0; i < n * n; i++) { drawMark(i, 0); drawBg(i, 0); marks[i] = 0; bgs[i] = 0; }
-      hil.fill(false); drawHilite();
+      groups = []; drawHilite();
       for (const op of sem.initial) apply(op);
     }
     function cellRect(cell) {
@@ -336,21 +445,30 @@ const StarsCodec = (() => {
       const r = Math.floor(cell / n), c = cell % n;
       return { left: b.left + (c + 0.12) * unit, top: b.top + (r + 0.12) * unit, width: unit, height: unit };
     }
+    function groupRect(cells) {
+      const rects = cells.map(cellRect);
+      const left = Math.min(...rects.map((q) => q.left)), top = Math.min(...rects.map((q) => q.top));
+      const right = Math.max(...rects.map((q) => q.left + q.width)), bottom = Math.max(...rects.map((q) => q.top + q.height));
+      return { left, top, width: right - left, height: bottom - top };
+    }
     reset();
-    return { apply, reset, cellRect, svg };
+    return { apply, reset, cellRect, groupRect, svg };
   }
 
   function describe(op, n) {
     const rc = (cell) => ` r${Math.floor(cell / n) + 1}c${(cell % n) + 1}`;
     if (op.kind === KIND.MARK) return (op.state === 2 ? '★ star' : op.state === 1 ? '✕' : 'cleared') + rc(op.cell);
     if (op.kind === KIND.BG) return (op.color ? 'hint' : 'hint cleared') + rc(op.cell);
-    if (op.kind === KIND.HILITE) { const k = op.cells.filter(Boolean).length; return k ? `highlight (${k} cells)` : 'highlights cleared'; }
+    if (op.kind === KIND.HILITE_ADD) return `highlight (${op.cells.length} cell${op.cells.length === 1 ? '' : 's'})`;
+    if (op.kind === KIND.HILITE_DEL) return 'highlight removed';
+    if (op.kind === KIND.HILITE_UPD) return `highlight → ${op.cells.length} cell${op.cells.length === 1 ? '' : 's'}`;
+    if (op.kind === KIND.HILITE) return op.groups.length ? `highlights (${op.groups.length} group${op.groups.length === 1 ? '' : 's'})` : 'highlights cleared';
     if (op.kind === KIND.UI) return op.label;
     if (op.kind === KIND.PAUSE) return 'paused for ' + fmt(op.away);
     return 'changed';
   }
   function fmt(ms) { const s = Math.floor((ms || 0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-  const isMove = (op) => op.kind === KIND.MARK || op.kind === KIND.BG || op.kind === KIND.HILITE;
+  const isMove = (op) => op.kind !== KIND.UI && op.kind !== KIND.PAUSE;
 
-  return { KIND, GLYPHS, DEFAULT_COLORS, HILITE_FILL, UI_LABELS, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells, fmt };
+  return { KIND, VERSION, GLYPHS, DEFAULT_COLORS, HILITE_FILL, UI_LABELS, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells, hiliteGroups, diffGroups, applyGroupOp, groupOutline, fmt };
 })();
