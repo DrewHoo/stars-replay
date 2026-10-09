@@ -274,7 +274,7 @@ const StarsCodec = (() => {
     for (const op of initial) if (op.kind === KIND.BG) op.color += 1;
     return {
       game: 'stars', n, regions, date: rec.date || null, startedAt: rec.startedAt || null,
-      duration: rec.duration || (events.length ? events[events.length - 1].t : 0),
+      duration: Math.max(rec.duration || 0, ...events.map((e) => e.t), 0),
       colors: colors.map((name) => ({ name, hex: palette[name] || DEFAULT_COLORS[name] || '#ff7868' })),
       initial, events, skipped,
     };

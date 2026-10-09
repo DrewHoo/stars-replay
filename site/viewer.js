@@ -110,6 +110,7 @@
   }
 
   function finishOpen() {
+    rec.duration = Math.max(rec.duration || 0, ...events.map((e) => e.t));
     const moves = events.filter((e) => !e.ui).length;
     $('title').textContent = `${cap(rec.game)} · ${rec.date || 'undated'}`;
     $('meta').textContent = `${moves} moves in ${fmt(rec.duration)}` + (rec.startedAt ? ` · recorded ${new Date(rec.startedAt).toLocaleString()}` : '');
