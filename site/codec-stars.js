@@ -5,13 +5,17 @@
 // viewer does not need the site's markup at all.
 const StarsCodec = (() => {
   const MAGIC = 0x53; // 'S'
-  const VERSION = 2; // v2: highlight groups (v1 wrote one bitmap)
+  const VERSION = 3; // v3: a color per highlight group (v2: groups, v1: one bitmap)
   const EPOCH_DAY = Date.UTC(2025, 0, 1) / 86400000;
   const KIND = { MARK: 0, BG: 1, HILITE: 2, UI: 3, PAUSE: 4, HILITE_ADD: 5, HILITE_DEL: 6, HILITE_UPD: 7 };
   const HILITE_INSET = 0.15, HILITE_RADIUS = 0.2; // the site's path geometry
   const UI_LABELS = ['Undo', 'Hint', 'Check', 'Toggle highlighter', 'Reset Puzzle', 'Resume'];
   const DEFAULT_COLORS = { 'coral-300': '#ff7868', 'yellow-default': '#fed23f', 'orange-300': '#ff9c4b', 'white': '#fafafa', 'black': '#2f2525', 'gray-300': '#bdbdbd', 'gray-400': '#8b8b8b' };
-  const HILITE_FILL = '#8575FC';
+  const HILITE_FILL = '#8575fc';
+  // Highlighter colors the site offers; a group's color byte indexes this table (255 = literal hex follows).
+  const HILITE_COLORS = ['#8575fc', '#4c4c4c']; // purple, black
+  const normColor = (c) => { c = String(c || '').trim().toLowerCase(); const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(c); return m ? '#' + [m[1], m[2], m[3]].map((x) => (+x).toString(16).padStart(2, '0')).join('') : /^#[0-9a-f]{6}$/.test(c) ? c : HILITE_FILL; };
+  const isDefaultColor = (g) => !g.color || g.color === HILITE_FILL;
   const GLYPHS = {"star":{"viewBox":"0 0 44 43","paths":[{"d":"M17.51 35.49L22.27 32.91L27.03 35.49C27.65 35.84 28.32 36 29 36C29.84 36 30.69 35.73 31.41 35.21C32.7 34.27 33.33 32.7 33.03 31.13L32.05 25.78L35.98 22.04C37.15 20.94 37.56 19.3 37.06 17.78C36.56 16.25 35.27 15.17 33.69 14.96L28.31 14.25L25.98 9.35C25.06 7.43 22.86 6.53 20.87 7.25C19.84 7.61 19.03 8.36 18.56 9.35L16.22 14.25L10.85 14.96C9.26 15.17 7.97 16.25 7.47 17.78C6.98 19.3 7.39 20.94 8.55 22.04L12.48 25.78L11.5 31.13C11.2 32.7 11.83 34.27 13.12 35.21C14.41 36.15 16.09 36.26 17.5 35.49","fill":"var(--black)"},{"d":"M33.73 19.67C34.25 19.18 33.97 18.3 33.26 18.21L26.65 17.33C26.33 17.29 26.05 17.08 25.9 16.79L23.03 10.76C22.83 10.33 22.36 10.18 21.98 10.33C21.78 10.4 21.6 10.54 21.5 10.76L18.63 16.79C18.49 17.08 18.21 17.29 17.89 17.33L11.28 18.21C10.57 18.3 10.28 19.18 10.8 19.67L15.63 24.27C15.87 24.49 15.97 24.83 15.91 25.15L14.7 31.72C14.57 32.43 15.31 32.96 15.94 32.62L21.8 29.43C21.8 29.43 21.81 29.43 21.82 29.42C22.1 29.28 22.44 29.28 22.72 29.43L28.58 32.62C29.21 32.96 29.95 32.42 29.82 31.72L28.6 25.15C28.55 24.83 28.65 24.5 28.89 24.27L33.72 19.67H33.73Z","fill":"var(--yellow-default)"},{"d":"M21.51 10.76L18.64 16.79C18.49 17.08 18.22 17.29 17.89 17.33L11.28 18.21C10.58 18.3 10.29 19.18 10.81 19.67L15.64 24.27C15.88 24.49 15.98 24.83 15.92 25.15L14.71 31.72C14.58 32.43 15.32 32.96 15.95 32.62L21.81 29.43C21.81 29.43 21.82 29.43 21.83 29.42C20.12 22.32 20.9 15.57 21.97 10.32C21.77 10.39 21.6 10.54 21.49 10.75L21.51 10.76Z","fill":"var(--orange-300)"}]},"x":{"viewBox":"0 0 43 43","paths":[{"d":"M24.36 17.21C24.75 16.82 25.39 16.82 25.79 17.21C26.18 17.61 26.18 18.25 25.79 18.64L22.93 21.5L25.79 24.36C26.18 24.75 26.18 25.39 25.79 25.79C25.39 26.18 24.75 26.18 24.36 25.79L21.5 22.93L18.64 25.79C18.25 26.18 17.61 26.18 17.21 25.79C16.82 25.39 16.82 24.75 17.21 24.36L20.07 21.5L17.21 18.64C16.82 18.25 16.82 17.61 17.21 17.21C17.61 16.82 18.25 16.82 18.64 17.21L21.5 20.07L24.36 17.21Z","fill":"var(--gray-400)"}]}};
 
   // ---------- byte helpers ----------
@@ -78,47 +82,50 @@ const StarsCodec = (() => {
     svg.style.cssText = 'position:absolute;left:-9999px;top:-9999px';
     const live = paths.map((p) => { const q = document.createElementNS(NS, 'path'); q.setAttribute('d', p.getAttribute('d') || ''); svg.appendChild(q); return q; });
     document.body.appendChild(svg);
-    const groups = live.map(() => []);
+    const groups = live.map((_, i) => ({ cells: [], color: normColor(paths[i].getAttribute('fill') || (paths[i].style && paths[i].style.fill)) }));
     try {
       for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
         const pt = new DOMPoint(c + 0.5, r + 0.5);
         const i = live.findIndex((q) => q.isPointInFill(pt));
-        if (i >= 0) groups[i].push(r * n + c);
+        if (i >= 0) groups[i].cells.push(r * n + c);
       }
     } finally { svg.remove(); }
-    return groups.filter((g) => g.length);
+    return groups.filter((g) => g.cells.length);
   }
   function hiliteCells(layerHtml, n) {
     const cells = new Array(n * n).fill(false);
-    for (const g of hiliteGroups(layerHtml, n)) for (const i of g) cells[i] = true;
+    for (const g of hiliteGroups(layerHtml, n)) for (const i of g.cells) cells[i] = true;
     return cells;
   }
 
   // Compare two group lists (site path order) and describe the change as the
   // smallest op: one group added, one removed, one changed, else the full set.
-  const groupKey = (g) => g.join(',');
+  const groupKey = (g) => (isDefaultColor(g) ? '' : g.color + ':') + g.cells.join(',');
+  const cloneGroup = (g) => ({ cells: g.cells.slice(), color: g.color || HILITE_FILL });
+  const opGroup = (op) => ({ cells: op.cells.slice(), color: op.color || HILITE_FILL });
+  const colorField = (g) => (isDefaultColor(g) ? {} : { color: g.color });
   function diffGroups(oldG, newG) {
     const same = (a, b) => a.length === b.length && a.every((g, i) => groupKey(g) === groupKey(b[i]));
     if (same(oldG, newG)) return null;
     if (newG.length === oldG.length + 1) {
-      for (let i = 0; i < newG.length; i++) if (same(newG.slice(0, i).concat(newG.slice(i + 1)), oldG)) return { kind: KIND.HILITE_ADD, index: i, cells: newG[i] };
+      for (let i = 0; i < newG.length; i++) if (same(newG.slice(0, i).concat(newG.slice(i + 1)), oldG)) return { kind: KIND.HILITE_ADD, index: i, cells: newG[i].cells, ...colorField(newG[i]) };
     }
     if (newG.length === oldG.length - 1) {
       for (let i = 0; i < oldG.length; i++) if (same(oldG.slice(0, i).concat(oldG.slice(i + 1)), newG)) return { kind: KIND.HILITE_DEL, index: i };
     }
     if (newG.length === oldG.length) {
       const changed = newG.map((g, i) => (groupKey(g) !== groupKey(oldG[i]) ? i : -1)).filter((i) => i >= 0);
-      if (changed.length === 1) return { kind: KIND.HILITE_UPD, index: changed[0], cells: newG[changed[0]] };
+      if (changed.length === 1) return { kind: KIND.HILITE_UPD, index: changed[0], cells: newG[changed[0]].cells, ...colorField(newG[changed[0]]) };
     }
     return { kind: KIND.HILITE, groups: newG };
   }
   // Apply a highlight op to a group list (shared by decoder, renderer, stats).
   function applyGroupOp(groups, op) {
-    if (op.kind === KIND.HILITE) return op.groups.map((g) => g.slice());
-    const out = groups.map((g) => g.slice());
-    if (op.kind === KIND.HILITE_ADD) out.splice(Math.min(op.index, out.length), 0, op.cells.slice());
+    if (op.kind === KIND.HILITE) return op.groups.map(cloneGroup);
+    const out = groups.map(cloneGroup);
+    if (op.kind === KIND.HILITE_ADD) out.splice(Math.min(op.index, out.length), 0, opGroup(op));
     else if (op.kind === KIND.HILITE_DEL) out.splice(op.index, 1);
-    else if (op.kind === KIND.HILITE_UPD) out[op.index] = op.cells.slice();
+    else if (op.kind === KIND.HILITE_UPD) out[op.index] = opGroup(op);
     return out;
   }
 
@@ -253,15 +260,15 @@ const StarsCodec = (() => {
 
     const events = [];
     let skipped = 0;
-    for (const e of rec.events) {
-      const t = e[0];
+    for (let src = 0; src < rec.events.length; src++) {
+      const e = rec.events[src], t = e[0];
       if (e[1] === 'ui') { events.push({ t, kind: KIND.UI, label: e[2] }); continue; }
       if (e[1] === 'pause') { events.push({ t, kind: KIND.PAUSE, away: e[2] }); continue; }
       if (!Array.isArray(e[1])) { skipped++; continue; }
       const info = slotInfo(baseRoot, grid, n, e[1]);
       const html = rec.dict[e[2]] || '';
       if (!info) { skipped++; continue; }
-      if (info.type === 'mark') events.push({ t, kind: KIND.MARK, cell: info.cell, state: markState(html) });
+      if (info.type === 'mark') events.push({ t, src, kind: KIND.MARK, cell: info.cell, state: markState(html) });
       else if (info.type === 'bg') { const el = parseHtml(html); const name = el ? bgColorOf(el) : null; events.push({ t, kind: KIND.BG, cell: info.cell, color: name ? colorIdx(name) + 1 : 0 }); }
       else if (info.type === 'hilite') {
         const next = hiliteGroups(html, n);
@@ -270,6 +277,7 @@ const StarsCodec = (() => {
         if (op) events.push({ t, ...op });
       }
     }
+    events.sort((a, b) => a.t - b.t); // stable: ties keep recording order
     // BG color 0 means "clear"; shift initial ops to the same 1-based scheme.
     for (const op of initial) if (op.kind === KIND.BG) op.color += 1;
     return {
@@ -288,14 +296,26 @@ const StarsCodec = (() => {
   // ---------- semantic <-> bytes ----------
   function writeCells(w, cells) { w.varint(cells.length); for (const c of cells) w.varint(c); }
   function readCells(r) { const k = r.varint(); const out = []; for (let i = 0; i < k; i++) out.push(r.varint()); return out; }
-  function writeOp(w, op, n) {
+  function writeColor(w, color) { const c = normColor(color); const i = HILITE_COLORS.indexOf(c); if (i >= 0) w.u8(i); else { w.u8(255); w.str(c); } }
+  function readColor(r, version) { if (version < 3) return HILITE_FILL; const i = r.u8(); return i === 255 ? normColor(r.str()) : HILITE_COLORS[i] || HILITE_FILL; }
+  function writeGroup(w, g) { writeColor(w, g.color); writeCells(w, g.cells); }
+  function readGroup(r, version) { const color = readColor(r, version); return { cells: readCells(r), color }; }
+  // Links with only purple groups are written as v2 so viewers that predate v3 still open them.
+  function versionFor(sem) {
+    for (const op of [...sem.initial, ...sem.events]) {
+      if (op.kind === KIND.HILITE && op.groups.some((g) => !isDefaultColor(g))) return 3;
+      if ((op.kind === KIND.HILITE_ADD || op.kind === KIND.HILITE_UPD) && !isDefaultColor(op)) return 3;
+    }
+    return 2;
+  }
+  function writeOp(w, op, n, version = VERSION) {
     w.u8(op.kind);
     if (op.kind === KIND.MARK) { w.varint(op.cell); w.u8(op.state); }
     else if (op.kind === KIND.BG) { w.varint(op.cell); w.u8(op.color); }
-    else if (op.kind === KIND.HILITE) { w.varint(op.groups.length); for (const g of op.groups) writeCells(w, g); }
-    else if (op.kind === KIND.HILITE_ADD) { w.varint(op.index); writeCells(w, op.cells); }
+    else if (op.kind === KIND.HILITE) { w.varint(op.groups.length); for (const g of op.groups) { if (version >= 3) writeColor(w, g.color); writeCells(w, g.cells); } }
+    else if (op.kind === KIND.HILITE_ADD) { w.varint(op.index); if (version >= 3) writeColor(w, op.color); writeCells(w, op.cells); }
     else if (op.kind === KIND.HILITE_DEL) w.varint(op.index);
-    else if (op.kind === KIND.HILITE_UPD) { w.varint(op.index); writeCells(w, op.cells); }
+    else if (op.kind === KIND.HILITE_UPD) { w.varint(op.index); if (version >= 3) writeColor(w, op.color); writeCells(w, op.cells); }
     else if (op.kind === KIND.UI) { const i = UI_LABELS.indexOf(op.label); if (i >= 0) w.u8(i); else { w.u8(255); w.str(op.label); } }
     else if (op.kind === KIND.PAUSE) w.varint(op.away);
   }
@@ -307,21 +327,22 @@ const StarsCodec = (() => {
       if (version === 1) { // one bitmap, read as a single anonymous group
         const bytes = r.bytes(Math.ceil(n * n / 8)); const cells = [];
         for (let i = 0; i < n * n; i++) if (bytes[i >> 3] & (1 << (i & 7))) cells.push(i);
-        return { kind, groups: cells.length ? [cells] : [] };
+        return { kind, groups: cells.length ? [{ cells, color: HILITE_FILL }] : [] };
       }
-      const k = r.varint(); const groups = []; for (let i = 0; i < k; i++) groups.push(readCells(r));
+      const k = r.varint(); const groups = []; for (let i = 0; i < k; i++) groups.push(readGroup(r, version));
       return { kind, groups };
     }
-    if (kind === KIND.HILITE_ADD) return { kind, index: r.varint(), cells: readCells(r) };
+    if (kind === KIND.HILITE_ADD) { const index = r.varint(); const color = readColor(r, version); return { kind, index, cells: readCells(r), ...(color === HILITE_FILL ? {} : { color }) }; }
     if (kind === KIND.HILITE_DEL) return { kind, index: r.varint() };
-    if (kind === KIND.HILITE_UPD) return { kind, index: r.varint(), cells: readCells(r) };
+    if (kind === KIND.HILITE_UPD) { const index = r.varint(); const color = readColor(r, version); return { kind, index, cells: readCells(r), ...(color === HILITE_FILL ? {} : { color }) }; }
     if (kind === KIND.UI) { const i = r.u8(); return { kind, label: i === 255 ? r.str() : UI_LABELS[i] || 'button' }; }
     if (kind === KIND.PAUSE) return { kind, away: r.varint() };
     throw new Error('bad op ' + kind);
   }
   function toBytes(sem) {
     const w = new Writer();
-    w.u8(MAGIC); w.u8(VERSION); w.u8(sem.n);
+    const version = versionFor(sem);
+    w.u8(MAGIC); w.u8(version); w.u8(sem.n);
     const day = sem.date ? Math.round(Date.parse(sem.date + 'T00:00:00Z') / 86400000 - EPOCH_DAY) : 0;
     w.u16(Math.max(0, day));
     w.varint(sem.startedAt ? Math.round(Date.parse(sem.startedAt) / 60000 - EPOCH_DAY * 1440) : 0);
@@ -330,10 +351,10 @@ const StarsCodec = (() => {
     w.u8(sem.colors.length);
     for (const c of sem.colors) { w.str(c.name); const h = c.hex.replace('#', ''); w.u8(parseInt(h.slice(0, 2), 16)); w.u8(parseInt(h.slice(2, 4), 16)); w.u8(parseInt(h.slice(4, 6), 16)); }
     w.varint(sem.initial.length);
-    for (const op of sem.initial) writeOp(w, op, sem.n);
+    for (const op of sem.initial) writeOp(w, op, sem.n, version);
     w.varint(sem.events.length);
     let last = 0;
-    for (const ev of sem.events) { w.varint(ev.t - last); last = ev.t; writeOp(w, ev, sem.n); }
+    for (const ev of sem.events) { w.varint(Math.max(0, ev.t - last)); last = Math.max(last, ev.t); writeOp(w, ev, sem.n, version); }
     return w.out();
   }
   function fromBytes(u8) {
@@ -387,6 +408,7 @@ const StarsCodec = (() => {
     mk('rect', { x: 0, y: 0, width: n, height: n, rx: 0.2, fill: '#fafafa' });
     const bgLayer = mk('g', {});
     const hiLayer = mk('g', {});
+    const probLayer = mk('g', {});   // red wash over a row/column/region that breaks a rule
     const gridLayer = mk('g', { stroke: '#bdbdbd', 'stroke-width': 0.03 });
     for (let k = 1; k < n; k++) { mk('line', { x1: k, y1: 0, x2: k, y2: n }, gridLayer); mk('line', { x1: 0, y1: k, x2: n, y2: k }, gridLayer); }
     const wallLayer = mk('g', { stroke: '#2f2525', 'stroke-width': 0.11, 'stroke-linecap': 'round' });
@@ -397,6 +419,7 @@ const StarsCodec = (() => {
     }
     mk('rect', { x: 0, y: 0, width: n, height: n, rx: 0.2, fill: 'none', stroke: '#2f2525', 'stroke-width': 0.18 });
     const markLayer = mk('g', {});
+    const ringLayer = mk('g', {});   // red ring around the stars involved
     container.appendChild(svg);
 
     const marks = new Array(n * n).fill(0), bgs = new Array(n * n).fill(0);
@@ -422,7 +445,7 @@ const StarsCodec = (() => {
     }
     function drawHilite() {
       hiLayer.innerHTML = '';
-      for (const g of groups) mk('path', { d: groupOutline(g, n), fill: HILITE_FILL, 'fill-opacity': 0.55 }, hiLayer);
+      for (const g of groups) mk('path', { d: groupOutline(g.cells, n), fill: g.color || HILITE_FILL, 'fill-opacity': 0.55 }, hiLayer);
     }
     function apply(op) {
       if (op.kind === KIND.MARK) { marks[op.cell] = op.state; drawMark(op.cell, op.state); return op.cell; }
@@ -431,7 +454,7 @@ const StarsCodec = (() => {
         const before = groups;
         groups = applyGroupOp(groups, op);
         drawHilite();
-        return op.cells || (op.kind === KIND.HILITE_DEL ? before[op.index] : null) || null; // cells to flash
+        return op.cells || (op.kind === KIND.HILITE_DEL && before[op.index] ? before[op.index].cells : null) || null; // cells to flash
       }
       return null;
     }
@@ -452,23 +475,69 @@ const StarsCodec = (() => {
       return { left, top, width: right - left, height: bottom - top };
     }
     reset();
-    return { apply, reset, cellRect, groupRect, svg };
+    function setProblems(list) {
+      probLayer.innerHTML = ''; ringLayer.innerHTML = '';
+      const area = new Set(), stars = new Set();
+      for (const p of list || []) { p.area.forEach((i) => area.add(i)); p.stars.forEach((i) => stars.add(i)); }
+      for (const i of area) mk('rect', { x: i % n, y: Math.floor(i / n), width: 1, height: 1, fill: PROBLEM_RED, 'fill-opacity': 0.2 }, probLayer);
+      for (const i of stars) mk('rect', { x: (i % n) + 0.07, y: Math.floor(i / n) + 0.07, width: 0.86, height: 0.86, rx: 0.2, fill: 'none', stroke: PROBLEM_RED, 'stroke-width': 0.08 }, ringLayer);
+    }
+    return { apply, reset, cellRect, groupRect, setProblems, svg };
+  }
+
+  // ---------- rule check ----------
+  // Checks the marks against the rules of Stars, never against the answer:
+  // exactly K stars in every row, column and region (K = 2 on the 9×9 boards),
+  // and no two stars touching, diagonals included. A unit breaks the rules when
+  // it has too many stars, or when its stars plus its blank cells can no longer
+  // reach K (e.g. one star and the rest crossed out).
+  const PROBLEM_RED = '#e5484d';
+  const starsPerUnit = (n) => (n >= 8 ? 2 : 1);
+  function ruleProblems(marks, regions, n) {
+    const k = starsPerUnit(n), out = [];
+    const rc = (i) => `r${Math.floor(i / n) + 1}c${(i % n) + 1}`;
+    const units = [];
+    for (let r = 0; r < n; r++) units.push({ id: 'row' + r, name: `row ${r + 1}`, cells: Array.from({ length: n }, (_, c) => r * n + c) });
+    for (let c = 0; c < n; c++) units.push({ id: 'col' + c, name: `column ${c + 1}`, cells: Array.from({ length: n }, (_, r) => r * n + c) });
+    const byRegion = new Map();
+    (regions || []).forEach((id, i) => { if (!byRegion.has(id)) byRegion.set(id, []); byRegion.get(id).push(i); });
+    for (const cells of byRegion.values()) units.push({ id: 'reg' + cells[0], name: `the region at ${rc(cells[0])}`, cells });
+    for (const u of units) {
+      const stars = u.cells.filter((i) => marks[i] === 2);
+      const room = stars.length + u.cells.filter((i) => !marks[i]).length;
+      if (stars.length > k) out.push({ key: 'many:' + u.id, text: `${stars.length} stars in ${u.name}`, area: u.cells, stars });
+      else if (room < k) out.push({ key: 'room:' + u.id, text: room ? `${u.name} can only fit ${room} star${room === 1 ? '' : 's'}` : `${u.name} can't fit a star`, area: u.cells, stars });
+    }
+    for (let i = 0; i < n * n; i++) {
+      if (marks[i] !== 2) continue;
+      const r = Math.floor(i / n), c = i % n;
+      for (const [dr, dc] of [[0, 1], [1, -1], [1, 0], [1, 1]]) {
+        const rr = r + dr, cc = c + dc;
+        if (rr < n && cc >= 0 && cc < n && marks[rr * n + cc] === 2) {
+          const j = rr * n + cc;
+          out.push({ key: `touch:${i}:${j}`, text: `stars touch at ${rc(i)} and ${rc(j)}`, area: [i, j], stars: [i, j] });
+        }
+      }
+    }
+    return out;
   }
 
   function describe(op, n) {
     const rc = (cell) => ` r${Math.floor(cell / n) + 1}c${(cell % n) + 1}`;
     if (op.kind === KIND.MARK) return (op.state === 2 ? '★ star' : op.state === 1 ? '✕' : 'cleared') + rc(op.cell);
     if (op.kind === KIND.BG) return (op.color ? 'hint' : 'hint cleared') + rc(op.cell);
-    if (op.kind === KIND.HILITE_ADD) return `highlight (${op.cells.length} cell${op.cells.length === 1 ? '' : 's'})`;
+    const hue = colorName(op.color);
+    if (op.kind === KIND.HILITE_ADD) return `${hue}highlight (${op.cells.length} cell${op.cells.length === 1 ? '' : 's'})`;
     if (op.kind === KIND.HILITE_DEL) return 'highlight removed';
-    if (op.kind === KIND.HILITE_UPD) return `highlight → ${op.cells.length} cell${op.cells.length === 1 ? '' : 's'}`;
+    if (op.kind === KIND.HILITE_UPD) return `${hue}highlight → ${op.cells.length} cell${op.cells.length === 1 ? '' : 's'}`;
     if (op.kind === KIND.HILITE) return op.groups.length ? `highlights (${op.groups.length} group${op.groups.length === 1 ? '' : 's'})` : 'highlights cleared';
     if (op.kind === KIND.UI) return op.label;
     if (op.kind === KIND.PAUSE) return 'paused for ' + fmt(op.away);
     return 'changed';
   }
+  function colorName(color) { const c = normColor(color); return c === HILITE_FILL ? '' : c === '#4c4c4c' ? 'black ' : c + ' '; }
   function fmt(ms) { const s = Math.floor((ms || 0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
   const isMove = (op) => op.kind !== KIND.UI && op.kind !== KIND.PAUSE;
 
-  return { KIND, VERSION, GLYPHS, DEFAULT_COLORS, HILITE_FILL, UI_LABELS, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells, hiliteGroups, diffGroups, applyGroupOp, groupOutline, fmt };
+  return { ruleProblems, starsPerUnit, KIND, VERSION, GLYPHS, DEFAULT_COLORS, HILITE_FILL, HILITE_COLORS, UI_LABELS, fromGeneric, toBytes, fromBytes, encodeFragment, decodeFragment, render, describe, isMove, hiliteCells, hiliteGroups, diffGroups, applyGroupOp, groupOutline, fmt };
 })();

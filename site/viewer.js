@@ -19,6 +19,8 @@
   let mode = 'dom';        // 'dom' replays recorded markup; 'stars' draws its own board
   let sem = null;          // semantic recording (stars mode)
   let board = null;        // StarsCodec.render controller (stars mode)
+  let sharedAt = 0;        // list position a "moment" link opened at (0 = none)
+  let rules = null;        // Stars rule check: { n, start, after[j], fresh[j] } (null when not Stars)
 
   // ---------- loading ----------
   async function gunzipBase64(b64) {
@@ -87,6 +89,15 @@
       })
       .sort((a, b) => a.t - b.t);
     for (const ev of events) ev.label = describe(ev);
+    rules = null;
+    try {
+      const s = rec.game === 'stars' || !rec.game ? StarsCodec.fromGeneric(rec, baseHtml) : null;
+      if (s) {
+        const bySrc = new Map(s.events.filter((op) => op.kind === StarsCodec.KIND.MARK).map((op) => [op.src, op]));
+        for (const ev of events) ev.mark = bySrc.get(ev.i) || null;
+        rules = { n: s.n, regions: s.regions, initial: s.initial };
+      }
+    } catch (err) { console.warn('rule check unavailable', err); }
     finishOpen();
   }
 
@@ -104,8 +115,9 @@
     board = StarsCodec.render(stage, s);
     events = s.events.map((op, i) => {
       const label = StarsCodec.describe(op, s.n);
-      return { i, t: op.t, op, ui: StarsCodec.isMove(op) ? null : label, label };
+      return { i, t: op.t, op, ui: StarsCodec.isMove(op) ? null : label, label, mark: op.kind === StarsCodec.KIND.MARK ? op : null };
     });
+    rules = { n: s.n, regions: s.regions, initial: s.initial };
     finishOpen();
   }
 
@@ -116,12 +128,80 @@
     $('meta').textContent = `${moves} moves in ${fmt(rec.duration)}` + (rec.startedAt ? ` · recorded ${new Date(rec.startedAt).toLocaleString()}` : '');
     $('count').textContent = `(${moves})`;
     $('total').textContent = fmt(rec.duration);
+    buildRuleTimeline();
     $('scrub').max = String(rec.duration || 1);
     document.title = `${cap(rec.game)} ${rec.date || ''} – Stars Replay`;
     renderList();
     reset();
     seekTo(0);
+    openAtMoment();
   }
+
+  // A moment link (?…&at=N) opens paused just after the Nth entry in the move
+  // list, so someone who is stuck at the same spot can step to the next move.
+  function momentParam() {
+    const raw = new URLSearchParams(location.search).get('at') || (location.hash.match(/[&#]at=(\d+)/) || [])[1];
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 ? Math.min(n, events.length) : 0;
+  }
+  function openAtMoment() {
+    sharedAt = momentParam();
+    if (!sharedAt) { $('notice').hidden = true; return; }
+    stepToEvent(sharedAt - 1);
+    const ev = events[sharedAt - 1];
+    $('notice-text').textContent = `Shared at ${fmt(ev.t)}, just after “${ev.label}”.`;
+    $('notice-next').hidden = sharedAt >= events.length;
+    $('notice').hidden = false;
+  }
+
+  // ---------- rule check ----------
+  // Replays just the marks to know, after every entry in the list, which rules
+  // the board breaks, and which of those that entry broke for the first time.
+  function buildRuleTimeline() {
+    if (!rules || typeof StarsCodec.ruleProblems !== 'function') { rules = null; return; }
+    const { n, regions } = rules;
+    const marks = new Array(n * n).fill(0);
+    for (const op of rules.initial || []) if (op.kind === StarsCodec.KIND.MARK) marks[op.cell] = op.state;
+    rules.start = StarsCodec.ruleProblems(marks, regions, n);
+    rules.after = []; rules.fresh = [];
+    let prev = new Set(rules.start.map((p) => p.key));
+    for (const ev of events) {
+      if (ev.mark) marks[ev.mark.cell] = ev.mark.state;
+      const now = ev.mark ? StarsCodec.ruleProblems(marks, regions, n) : rules.after[rules.after.length - 1] || rules.start;
+      rules.after.push(now);
+      rules.fresh.push(now.filter((p) => !prev.has(p.key)));
+      prev = new Set(now.map((p) => p.key));
+    }
+  }
+  function currentProblems() {
+    if (!rules || !rules.after) return [];
+    return cursor ? rules.after[cursor - 1] : rules.start;
+  }
+  function drawProblems() {
+    const list = currentProblems();
+    const box = $('problems');
+    box.hidden = !list.length;
+    box.textContent = list.length ? '⚠ Breaks the rules: ' + list.map((p) => p.text).join(' · ') : '';
+    if (mode === 'stars') { board.setProblems(list); return; }
+    const stage = $('board');
+    const old = stage.querySelector('.rule-overlay'); if (old) old.remove();
+    const grid = root && root.querySelector('[data-puzzle-grid]');
+    if (!list.length || !grid || !rules) return;
+    const n = rules.n, g = grid.getBoundingClientRect(), s = stage.getBoundingClientRect();
+    const layer = document.createElement('div');
+    layer.className = 'rule-overlay';
+    Object.assign(layer.style, { left: g.left - s.left + 'px', top: g.top - s.top + 'px', width: g.width + 'px', height: g.height + 'px' });
+    const cell = (i, cls) => {
+      const d = document.createElement('div'); d.className = cls;
+      Object.assign(d.style, { left: (i % n) * 100 / n + '%', top: Math.floor(i / n) * 100 / n + '%', width: 100 / n + '%', height: 100 / n + '%' });
+      layer.appendChild(d);
+    };
+    const area = new Set(), stars = new Set();
+    for (const p of list) { p.area.forEach((i) => area.add(i)); p.stars.forEach((i) => stars.add(i)); }
+    area.forEach((i) => cell(i, 'wash')); stars.forEach((i) => cell(i, 'ring'));
+    stage.appendChild(layer);
+  }
+  window.addEventListener('resize', () => rec && drawProblems());
 
   // ---------- board manipulation ----------
   function elAt(node, path) {
@@ -276,6 +356,14 @@
       li.className = ev.ui ? 'ui' : '';
       li.innerHTML = `<span class="t">${fmt(ev.t)}</span><span class="what"></span>`;
       li.querySelector('.what').textContent = ev.label;
+      const broke = rules && rules.fresh ? rules.fresh[i] : [];
+      if (broke.length) {
+        li.classList.add('bad');
+        const why = document.createElement('span');
+        why.className = 'why';
+        why.textContent = '⚠ ' + broke.map((p) => p.text).join(' · ');
+        li.querySelector('.what').appendChild(why);
+      }
       li.addEventListener('click', () => stepToEvent(i));
       list.appendChild(li);
     });
@@ -292,6 +380,10 @@
     }
     const cur = items[cursor - 1];
     if (cur) cur.scrollIntoView({ block: 'nearest' });
+    drawProblems();
+    const here = $('share-here');
+    here.hidden = !rec || cursor === 0;
+    if (cursor > 0) here.textContent = `Link to ${fmt(events[cursor - 1].t)}`;
   }
 
   // ---------- wiring ----------
@@ -323,17 +415,29 @@
     return InkwellShare.fragment(rec, baseHtml);
   }
 
-  $('share').addEventListener('click', async () => {
-    if (!rec) return;
+  async function shareUrl(at) {
     const base = (typeof INKWELL_REPLAY_CONFIG !== 'undefined' && INKWELL_REPLAY_CONFIG.PUBLIC_VIEWER_URL) || location.origin + location.pathname;
-    const url = base + '?' + await shareFragment();
+    return base + '?' + await shareFragment() + (at ? '&at=' + at : '');
+  }
+  async function copyLink(url, message) {
     try {
       await navigator.clipboard.writeText(url);
-      toast(`Link copied · ${(url.length / 1000).toFixed(1)}k characters`);
+      toast(message);
     } catch (err) {
       prompt('Copy this link:', url);
     }
+  }
+  $('share').addEventListener('click', async () => {
+    if (!rec) return;
+    const url = await shareUrl(0);
+    copyLink(url, `Link copied · ${(url.length / 1000).toFixed(1)}k characters`);
   });
+  $('share-here').addEventListener('click', async () => {
+    if (!rec || cursor === 0) return;
+    const ev = events[cursor - 1];
+    copyLink(await shareUrl(cursor), `Link copied · opens at ${fmt(ev.t)}, after ${ev.label}`);
+  });
+  $('notice-next').addEventListener('click', () => { stepToEvent(cursor); $('notice').hidden = true; });
 
   function toast(msg) {
     const el = $('toast');
@@ -360,5 +464,5 @@
   });
 
   loadFromQuery().then((r) => r && open(r)).catch((err) => { console.error(err); });
-  window.__viewer = { shareFragment, get mode() { return mode; }, get sem() { return sem; }, get rec() { return rec; } };
+  window.__viewer = { shareFragment, shareUrl, get rules() { return rules; }, get cursor() { return cursor; }, get mode() { return mode; }, get sem() { return sem; }, get rec() { return rec; } };
 })();

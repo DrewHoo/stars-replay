@@ -21,7 +21,7 @@
   <script src="https://drewhoover.com/embed/analytics.js" async></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="viewer.css?v=1791583835">
+  <link rel="stylesheet" href="viewer.css?v=1791985727">
 </head>
 <body>
   <header>
@@ -31,10 +31,16 @@
     </div>
     <div class="right">
       <button id="share">Copy share link</button>
+      <button id="share-here" class="quiet" hidden title="Copy a link that opens the replay at this exact point">Link to this moment</button>
       <button id="load" class="quiet">Load JSON…</button>
       <input type="file" id="file" accept="application/json,.json" hidden>
     </div>
   </header>
+
+  <div id="notice" class="notice" hidden>
+    <span id="notice-text"></span>
+    <button id="notice-next">Show the next move →</button>
+  </div>
 
   <main>
     <section class="stage">
@@ -44,6 +50,7 @@
       </div>
       <div id="board" class="board" hidden></div>
       <div id="flash" class="flash" hidden></div>
+      <p id="problems" class="problems" hidden></p>
     </section>
 
     <aside class="moves">
@@ -72,9 +79,9 @@
   </footer>
   <div id="toast" class="toast" hidden></div>
 
-  <script src="config.js?v=1791583835"></script>
-  <script src="share.js?v=1791583835"></script>
-  <script src="codec-stars.js?v=1791583835"></script>
-  <script src="viewer.js?v=1791583835"></script>
+  <script src="config.js?v=1791985727"></script>
+  <script src="share.js?v=1791985727"></script>
+  <script src="codec-stars.js?v=1791985727"></script>
+  <script src="viewer.js?v=1791985727"></script>
 </body>
 </html>
