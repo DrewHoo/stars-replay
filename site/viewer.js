@@ -75,8 +75,7 @@
 
     const stage = $('board');
     for (const [k, v] of Object.entries(rec.palette || {})) stage.style.setProperty('--' + k, v);
-    stage.style.width = rec.base.width + 'px';
-    stage.style.maxWidth = '100%';
+    stage.style.setProperty('--board-w', rec.base.width + 'px');
     stage.hidden = false;
     $('drop').hidden = true;
     $('controls').hidden = false;
@@ -107,8 +106,7 @@
     rec = { game: 'stars', date: s.date, startedAt: s.startedAt, duration: s.duration };
     const stage = $('board');
     stage.innerHTML = '';
-    stage.style.width = '588px';
-    stage.style.maxWidth = '100%';
+    stage.style.setProperty('--board-w', '588px');
     stage.hidden = false;
     $('drop').hidden = true;
     $('controls').hidden = false;
@@ -201,7 +199,9 @@
     area.forEach((i) => cell(i, 'wash')); stars.forEach((i) => cell(i, 'ring'));
     stage.appendChild(layer);
   }
-  window.addEventListener('resize', () => rec && drawProblems());
+  // The board resizes with the space around it (notice, problems line), not
+  // only with the window, so watch the board itself.
+  new ResizeObserver(() => rec && drawProblems()).observe($('board'));
 
   // ---------- board manipulation ----------
   function elAt(node, path) {
@@ -378,8 +378,14 @@
       items[i].classList.toggle('done', i < cursor - 1);
       items[i].classList.toggle('future', i >= cursor);
     }
+    // Follow the current move inside the list only: scrollIntoView would also
+    // scroll the page, which on a phone yanks it away from the board every move.
     const cur = items[cursor - 1];
-    if (cur) cur.scrollIntoView({ block: 'nearest' });
+    if (cur) {
+      const ol = $('list'), top = cur.offsetTop; // ol is position: relative
+      if (top < ol.scrollTop) ol.scrollTop = top;
+      else if (top + cur.offsetHeight > ol.scrollTop + ol.clientHeight) ol.scrollTop = top + cur.offsetHeight - ol.clientHeight;
+    }
     drawProblems();
     const here = $('share-here');
     here.hidden = !rec || cursor === 0;

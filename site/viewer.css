@@ -3,13 +3,29 @@
 html { height: 100%; }
 body { margin: 0; font: 14px/1.4 Quicksand, system-ui, sans-serif; color: var(--ink); background: var(--paper);
   background-image: radial-gradient(circle at 1.5px 1.5px, #f3e7ad 1.5px, transparent 0); background-size: 12px 12px;
-  display: flex; flex-direction: column; min-height: 100vh; }
+  display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
 header { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 2px solid var(--ink); background: var(--paper); }
 h1 { margin: 0; font-size: 22px; font-weight: 700; }
 .meta { color: var(--muted); font-size: 13px; }
 main { flex: 1; display: grid; grid-template-columns: 1fr 300px; gap: 16px; padding: 16px 20px; min-height: 0; }
-@media (max-width: 800px) { main { grid-template-columns: 1fr; } }
 .stage { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+/* The board's natural width is --board-w; it shrinks to the column, and on
+   desktop also to the height left between header and play bar, so the whole
+   replay fits one screen and the play bar is never below the fold. */
+.board { width: min(var(--board-w, 588px), 100%); }
+@media (min-width: 801px) {
+  body { height: 100vh; height: 100dvh; }
+  main { grid-template-rows: minmax(0, 1fr); }
+  .stage { container-type: size; overflow-y: auto; }
+  .board { width: min(var(--board-w, 588px), 100cqw - 12px, 100cqh - 64px); }
+}
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr; }
+  .board { width: min(var(--board-w, 588px), 100%, max(240px, 100dvh - 300px)); }
+  /* A short list leaves page above and below it to swipe on, so a scroll that
+     starts on the list doesn't trap the page. */
+  .moves { max-height: 50vh; max-height: 50dvh; }
+}
 .problems { margin: 14px 0 0; padding: 6px 12px; border: 2px solid #e5484d; border-radius: 8px; background: #fff; color: #b4232a; font-weight: 700; }
 .problems[hidden] { display: none; }
 .rule-overlay { position: absolute; pointer-events: none; }
@@ -20,15 +36,18 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 300px; gap: 16px; padd
 .moves li.bad .what { color: #b4232a; }
 .board { position: relative; pointer-events: none; }
 .board * { pointer-events: none !important; transition: none !important; animation: none !important; }
+/* The recorded Inkwell grid sets touch-action: none; here the board is a
+   picture, so a swipe on it has to scroll the page. */
+.board, .board * { touch-action: auto !important; }
 .board [data-puzzle-grid] { box-shadow: 6px 6px 0 0 var(--gray-300, #bdbdbd), 6px 6px 0 6px var(--black, #2f2525); }
 .flash { position: absolute; border: 3px solid #e5484d; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity .6s ease-out; }
 .flash.on { opacity: 1; transition: none; }
 .drop { border: 2px dashed var(--ink); border-radius: 12px; padding: 40px; text-align: center; max-width: 480px; background: rgba(255,255,255,.6); }
 .drop.over { background: #fff; }
-.moves { background: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; min-height: 0; max-height: calc(100vh - 170px); }
+.moves { background: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; min-height: 0; }
 .moves h2 { font-size: 15px; margin: 0 0 8px; }
 .moves h2 span { color: var(--muted); font-weight: 500; }
-.moves ol { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+.moves ol { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; position: relative; }
 .moves li { display: grid; grid-template-columns: 48px 1fr; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .moves li:hover { background: #fdf6d8; }
 .moves li.current { background: var(--accent); }
@@ -36,7 +55,8 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 300px; gap: 16px; padd
 .moves li.future { color: var(--muted); }
 .moves li .t { font-variant-numeric: tabular-nums; color: var(--muted); }
 .moves li.ui .what { font-style: italic; }
-.controls { display: flex; gap: 10px; align-items: center; padding: 12px 20px; border-top: 2px solid var(--ink); background: var(--paper); flex-wrap: wrap; }
+.controls { position: sticky; bottom: 0; z-index: 10; display: flex; gap: 10px; align-items: center; padding: 12px 20px; border-top: 2px solid var(--ink); background: var(--paper); flex-wrap: wrap; }
+.controls[hidden] { display: none; }
 .controls button, header button { font: inherit; font-weight: 700; border: 2px solid var(--ink); border-radius: 8px; padding: 6px 10px; background: var(--accent); cursor: pointer; box-shadow: 2px 2px 0 0 var(--ink); }
 .controls button:active, header button:active { transform: translate(2px, 2px); box-shadow: none; }
 button.quiet { background: #fff; }
@@ -49,4 +69,10 @@ header .right { display: flex; flex-wrap: wrap; gap: 8px; }
 .notice[hidden] { display: none; }
 .notice button { font: inherit; font-weight: 700; border: 2px solid var(--ink); border-radius: 8px; padding: 5px 10px; background: var(--accent); cursor: pointer; margin-left: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
-.toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-weight: 600; }
+.toast { position: fixed; z-index: 20; left: 50%; bottom: 80px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-weight: 600; }
+@media (max-width: 800px) {
+  .controls { gap: 8px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  .controls input[type=range] { order: -1; flex-basis: 100%; }
+  .hint { display: none; }
+  .toast { bottom: 130px; }
+}
